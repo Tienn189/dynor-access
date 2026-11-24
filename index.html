@@ -1,0 +1,516 @@
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynor Access</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f7;
+  --card: #fff;
+  --ink: #17202b;
+  --line: #dce0e6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111318;
+    --card: #20232b;
+    --ink: #f3f4f8;
+    --line: #41454e;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px system-ui;
+}
+main {
+  max-width: 1000px;
+  margin: auto;
+  padding: 20px;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+h1 { letter-spacing: -1.5px; }
+section {
+  background: var(--card);
+  padding: 20px;
+  border-radius: 20px;
+  margin: 16px 0;
+}
+input, select, button {
+  font: inherit;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin: 5px 0;
+  max-width: 100%;
+}
+input, select {
+  width: 100%;
+  background: var(--bg);
+  color: var(--ink);
+}
+button {
+  background: #245ad6;
+  color: white;
+  cursor: pointer;
+  border: 0;
+}
+button:disabled { opacity: .5; }
+button.danger { background: #a52e36; }
+label {
+  display: block;
+  margin-top: 10px;
+  font-size: 13px;
+}
+small { opacity: .7; }
+article {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+#status {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  position: sticky;
+  bottom: 10px;
+  background: var(--card);
+  padding: 12px;
+  border-radius: 12px;
+}
+[hidden] { display: none !important; }
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <div>
+    <small>DYNOR / ADMINISTRATION</small>
+    <h1>Dynor Access</h1>
+  </div>
+  <button id="logout" hidden>Đăng xuất</button>
+</header>
+
+<section id="login">
+  <h2>Đăng nhập quản trị</h2>
+  <label>Email</label>
+  <input id="email" type="email">
+  <button id="otpSend">Gửi OTP</button>
+  <label>Mã xác minh</label>
+  <input id="otp" inputmode="numeric">
+  <button id="verify">Đăng nhập</button>
+</section>
+
+<div id="dashboard" hidden>
+
+<section>
+  <h2>Quản lý tài khoản</h2>
+  <small id="stats"></small>
+  <input id="search" placeholder="Tìm email trong trang hiện tại">
+
+  <div class="row">
+    <button id="prev">Trang trước</button>
+    <span id="page"></span>
+    <button id="next">Trang sau</button>
+    <button id="reload">Làm mới</button>
+  </div>
+
+  <div id="accounts"></div>
+</section>
+
+<section id="detail" hidden>
+  <h2 id="selected"></h2>
+  <div id="info"></div>
+
+  <h3>Quản lý VIP</h3>
+
+  <label>Gói thành viên</label>
+  <select id="plan">
+    <option value="week">Tuần · Premium</option>
+    <option value="month" selected>Tháng · Crown</option>
+    <option value="quarter">Quý · Crown</option>
+    <option value="lifetime">Vĩnh viễn</option>
+  </select>
+
+  <label>Thời hạn tính từ hôm nay (ngày)</label>
+  <input id="days" type="number" min="1" value="30">
+
+  <button id="vip">Cấp / chỉnh sửa VIP</button>
+  <button class="danger" id="revoke">Hủy VIP</button>
+
+  <label>Điều chỉnh lượt Crown (+/-)</label>
+  <input id="delta" type="number" value="5">
+  <button id="credits">Cập nhật lượt tải</button>
+
+  <h3>Cấp quyền hình nền</h3>
+
+  <select id="wallpaper"></select>
+  <img id="cover" width="90" hidden alt="Ảnh xem trước">
+
+  <label>Thời hạn (0 = vĩnh viễn)</label>
+  <input id="giftDays" type="number" min="0" value="0">
+
+  <button id="gift">Cấp quyền trực tiếp</button>
+
+  <h3>Hình nền đã được cấp</h3>
+  <div id="gifts"></div>
+</section>
+
+<section>
+  <h2>Nhật ký quản trị</h2>
+  <button id="auditLoad">Tải nhật ký</button>
+  <div id="audit"></div>
+</section>
+
+</div>
+
+<p id="status" role="status"></p>
+</main>
+
+<script type="module">
+
+import { createClient } from
+'https://esm.sh/@supabase/supabase-js@2';
+
+const $ = id => document.getElementById(id);
+
+const client = createClient(
+  'https://wkivekbodwbinmvargts.supabase.co',
+  'sb_publishable_7eP5C7X8t6ip2ntFANmGJQ_K1Mybu2m',
+  {
+    auth: {
+      persistSession: false
+    }
+  }
+);
+
+let page = 1;
+let rows = [];
+let target = null;
+let walls = [];
+let busy = false;
+
+const msg = s => {
+  $('status').textContent = s;
+};
+
+const run = fn => async () => {
+  if (busy) return;
+
+  busy = true;
+  msg('Đang xử lý...');
+
+  try {
+    await fn();
+    msg('Hoàn tất.');
+  } catch (e) {
+    msg(e.message || String(e));
+  } finally {
+    busy = false;
+  }
+};
+
+async function api(action, extra = {}) {
+
+  const {
+    data: { session }
+  } = await client.auth.getSession();
+
+  if (!session)
+    throw Error('Chưa đăng nhập');
+
+  const { data, error } =
+    await client.functions.invoke('dynor-access', {
+      body: { action, ...extra },
+      headers: {
+        Authorization: 'Bearer ' + session.access_token
+      }
+    });
+
+  if (error) {
+    let m = error.message;
+
+    try {
+      m = (await error.context.json()).error || m;
+    } catch {}
+
+    throw Error(m);
+  }
+
+  return data;
+}
+
+function node(tag, text) {
+  const e = document.createElement(tag);
+  e.textContent = text;
+  return e;
+}
+
+function button(text, fn, cls = '') {
+  const b = node('button', text);
+  b.className = cls;
+  b.onclick = run(fn);
+  return b;
+}
+
+function fmt(x) {
+  return x
+    ? new Date(x).toLocaleString('vi-VN')
+    : '—';
+}
+
+function render() {
+
+  const q = $('search').value.toLowerCase();
+
+  $('accounts').replaceChildren();
+
+  for (const a of rows.filter(x =>
+    (x.email || '').toLowerCase().includes(q)
+  )) {
+
+    const el = node('article', '');
+
+    el.append(
+      node('strong', a.email || a.id),
+      node('p',
+        `${a.quota?.active ? 'VIP' : 'Free'} · ${
+          a.quota?.unlimited
+            ? 'Không giới hạn'
+            : a.quota?.remaining ?? 0
+        } lượt còn lại`
+      ),
+      button('Quản lý', () => select(a.id))
+    );
+
+    $('accounts').append(el);
+  }
+}
+
+async function load() {
+
+  const r = await api('list', { page });
+
+  rows = r.accounts;
+
+  $('stats').textContent =
+    `Tổng tài khoản: ${r.total ?? '—'} · ${
+      rows.length
+    } tài khoản trên trang`;
+
+  $('page').textContent = 'Trang ' + page;
+
+  render();
+
+  if (target && rows.some(x => x.id === target)) {
+    await select(target);
+  } else {
+    target = null;
+    $('detail').hidden = true;
+  }
+}
+
+async function select(id) {
+
+  target = id;
+
+  const a = rows.find(x => x.id === id);
+
+  $('detail').hidden = false;
+  $('selected').textContent = a.email || id;
+
+  $('info').replaceChildren(
+    node('p', `UID: ${id}`),
+    node('p', `Ngày đăng ký: ${fmt(a.created_at)}`),
+    node('p', `Đăng nhập cuối: ${fmt(a.last_sign_in_at)}`),
+    node('p', `Gói: ${a.vip?.plan_id || 'Free'}`),
+    node('p', `Hết hạn: ${fmt(a.vip?.vip_expires_at)}`),
+    node('p', `Lượt còn: ${
+      a.quota?.unlimited
+        ? 'Không giới hạn'
+        : a.quota?.remaining ?? 0
+    }`)
+  );
+
+  const gifts = await api('gifts', { target });
+
+  $('gifts').replaceChildren();
+
+  for (const g of gifts) {
+
+    const el = node(
+      'article',
+      `${g.dynor_wallpapers?.title || g.wallpaper_id} · ${
+        g.expires_at ? fmt(g.expires_at) : 'Vĩnh viễn'
+      } `
+    );
+
+    el.append(
+      button('Thu hồi', async () => {
+
+        if (confirm('Thu hồi quyền hình nền?')) {
+          await mutate('revoke_gift', {
+            wallpaper_id: g.wallpaper_id
+          });
+        }
+
+      }, 'danger')
+    );
+
+    $('gifts').append(el);
+  }
+
+  $('detail').scrollIntoView({
+    behavior: 'smooth',
+    block: 'start'
+  });
+}
+
+async function mutate(action, data = {}) {
+
+  if (!target)
+    throw Error('Chọn tài khoản');
+
+  await api(action, { target, data });
+  await load();
+}
+
+$('otpSend').onclick = run(async () => {
+
+  const { error } = await client.auth.signInWithOtp({
+    email: $('email').value.trim(),
+    options: {
+      shouldCreateUser: false
+    }
+  });
+
+  if (error) throw error;
+});
+
+$('verify').onclick = run(async () => {
+
+  const { error } = await client.auth.verifyOtp({
+    email: $('email').value.trim(),
+    token: $('otp').value.trim(),
+    type: 'email'
+  });
+
+  if (error) throw error;
+
+  await load();
+
+  walls = await api('wallpapers');
+
+  $('wallpaper').replaceChildren(
+    ...walls.map(w =>
+      new Option(
+        w.title + ' · ' + w.access_tier,
+        w.id
+      )
+    )
+  );
+
+  $('wallpaper').onchange();
+
+  $('login').hidden = true;
+  $('dashboard').hidden = false;
+  $('logout').hidden = false;
+});
+
+$('logout').onclick = run(async () => {
+  await client.auth.signOut();
+  location.reload();
+});
+
+$('search').oninput = render;
+
+$('prev').onclick = run(async () => {
+  page = Math.max(1, page - 1);
+  await load();
+});
+
+$('next').onclick = run(async () => {
+  if (rows.length === 50) {
+    page++;
+    await load();
+  }
+});
+
+$('reload').onclick = run(load);
+
+$('wallpaper').onchange = () => {
+
+  const u = walls.find(
+    w => w.id === $('wallpaper').value
+  )?.image_url;
+
+  $('cover').hidden = !u;
+
+  if (u) $('cover').src = u;
+};
+
+$('vip').onclick = run(async () => {
+
+  if (confirm('Thay thế quyền VIP hiện tại?')) {
+
+    await mutate('vip', {
+      plan: $('plan').value,
+      days: Number($('days').value)
+    });
+  }
+});
+
+$('revoke').onclick = run(async () => {
+
+  if (confirm(
+    'Hủy VIP của tài khoản này? Lượt đã mua và quà riêng vẫn được giữ.'
+  )) {
+    await mutate('revoke_vip');
+  }
+});
+
+$('credits').onclick = run(() =>
+  mutate('credits', {
+    delta: Number($('delta').value)
+  })
+);
+
+$('gift').onclick = run(() =>
+  mutate('gift', {
+    wallpaper_id: $('wallpaper').value,
+    days: Number($('giftDays').value)
+  })
+);
+
+$('auditLoad').onclick = run(async () => {
+
+  $('audit').replaceChildren(
+    ...(await api('audit')).map(a =>
+      node(
+        'article',
+        `${fmt(a.created_at)} · ${a.action} · Admin ${
+          a.actor
+        } → ${a.target}`
+      )
+    )
+  );
+});
+
+</script>
+</body>
+</html>
